@@ -1,66 +1,136 @@
-import { View, Text, StyleSheet, FlatList, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, Button, ActivityIndicator } from 'react-native';
 import { useEffect, useState } from 'react';
 import * as MediaLibrary from 'expo-media-library';
-import { router } from 'expo-router';
-import { Play } from 'lucide-react-native';
+import { Audio } from 'expo-av';
+import { Play, Pause } from 'lucide-react-native';
 
 export default function LibraryScreen() {
   const [songs, setSongs] = useState<MediaLibrary.Asset[]>([]);
   const [permission, setPermission] = useState<boolean>(false);
+  const [sound, setSound] = useState<Audio.Sound | null>(null);
+  const [currentSong, setCurrentSong] = useState<string | null>(null);
+  const [isPlaying, setIsPlaying] = useState<boolean>(false);
+  const [loading, setLoading] = useState<boolean>(true);
 
   useEffect(() => {
-    (async () => {
-      const { status } = await MediaLibrary.requestPermissionsAsync();
-      setPermission(status === 'granted');
-
-      if (status === 'granted') {
-        const media = await MediaLibrary.getAssetsAsync({
-          mediaType: 'audio',
-        });
-        setSongs(media.assets);
-      }
-    })();
+    checkPermissionAndLoadSongs();
   }, []);
 
-  const handleSongPress = (song: MediaLibrary.Asset) => {
-    router.push({
-      pathname: '/player',
-      params: { trackId: song.id }
-    });
+  const checkPermissionAndLoadSongs = async () => {
+    setLoading(true);
+    const { status } = await MediaLibrary.requestPermissionsAsync();
+    setPermission(status === 'granted');
+
+    if (status === 'granted') {
+      await loadSongs();
+    }
+    setLoading(false);
+  };
+
+  const loadSongs = async () => {
+    try {
+      const media = await MediaLibrary.getAssetsAsync({
+        mediaType: MediaLibrary.MediaType.audio,
+        first: 1000, // Charger plus de fichiers si nécessaire
+      });
+      setSongs(media.assets);
+    } catch (error) {
+      console.error('Erreur lors du chargement des fichiers audio :', error);
+    }
+  };
+
+  const playSound = async (song: MediaLibrary.Asset) => {
+    try {
+      if (sound) {
+        await sound.stopAsync();
+        await sound.unloadAsync();
+        setSound(null);
+      }
+
+      const { sound: newSound } = await Audio.Sound.createAsync(
+        { uri: song.uri },
+        { shouldPlay: true }
+      );
+
+      setSound(newSound);
+      setCurrentSong(song.id);
+      setIsPlaying(true);
+
+      newSound.setOnPlaybackStatusUpdate((status) => {
+        if (status.isLoaded && status.didJustFinish) {
+          setIsPlaying(false);
+          setCurrentSong(null);
+        }
+      });
+    } catch (error) {
+      console.error('Erreur lors de la lecture du son :', error);
+    }
+  };
+
+  const togglePlayback = async (song: MediaLibrary.Asset) => {
+    if (currentSong === song.id && sound) {
+      if (isPlaying) {
+        await sound.pauseAsync();
+        setIsPlaying(false);
+      } else {
+        await sound.playAsync();
+        setIsPlaying(true);
+      }
+    } else {
+      playSound(song);
+    }
+  };
+
+  const formatDuration = (seconds: number | undefined) => {
+    if (!seconds) return '00:00';
+    const minutes = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${minutes}:${secs < 10 ? '0' : ''}${secs}`;
   };
 
   if (!permission) {
     return (
       <View style={styles.container}>
-        <Text style={styles.title}>Permission Required</Text>
+        <Text style={styles.title}>Permission requise</Text>
         <Text style={styles.text}>
-          Please grant access to your media library to use VazoPhone.
+          Veuillez accorder l'accès à votre bibliothèque pour utiliser VazoPhone.
         </Text>
+        <Button title="Accorder l'accès" onPress={checkPermissionAndLoadSongs} />
       </View>
     );
   }
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Your Library</Text>
-      <FlatList
-        data={songs}
-        keyExtractor={(item) => item.id}
-        renderItem={({ item }) => (
-          <TouchableOpacity 
-            style={styles.songItem}
-            onPress={() => handleSongPress(item)}
-          >
-            <View style={styles.songInfo}>
-              <Text style={styles.songTitle}>{item.filename}</Text>
-              <Text style={styles.songDuration}>
-                {Math.round(item.duration)} seconds
-              </Text>
-            </View>
-            <Play color="#6366F1" size={24} />
-          </TouchableOpacity>
-        )}
-      />
+      <Text style={styles.title}>Votre Bibliothèque</Text>
+
+      {loading ? (
+        <ActivityIndicator size="large" color="#6366F1" />
+      ) : (
+        <>
+          <Button title="Recharger la liste" onPress={loadSongs} />
+          <FlatList
+            data={songs}
+            keyExtractor={(item) => item.id}
+            renderItem={({ item }) => (
+              <TouchableOpacity
+                style={styles.songItem}
+                onPress={() => togglePlayback(item)}
+              >
+                <View style={styles.songInfo}>
+                  <Text style={styles.songTitle}>{item.filename}</Text>
+                  <Text style={styles.songDuration}>{formatDuration(item.duration)}</Text>
+                </View>
+                {currentSong === item.id && isPlaying ? (
+                  <Pause color="#FF0000" size={24} />
+                ) : (
+                  <Play color="#6366F1" size={24} />
+                )}
+              </TouchableOpacity>
+            )}
+          />
+        </>
+      )}
     </View>
   );
 }
@@ -70,19 +140,18 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#1E1E1E',
     paddingTop: 60,
+    paddingHorizontal: 20,
   },
   title: {
-    fontSize: 32,
+    fontSize: 28,
     fontFamily: 'Inter-Bold',
     color: '#FFFFFF',
-    paddingHorizontal: 20,
     marginBottom: 20,
   },
   text: {
     fontSize: 16,
     fontFamily: 'Inter-Regular',
     color: '#9CA3AF',
-    paddingHorizontal: 20,
   },
   songItem: {
     flexDirection: 'row',
@@ -90,7 +159,6 @@ const styles = StyleSheet.create({
     padding: 15,
     borderBottomWidth: 1,
     borderBottomColor: '#333',
-    marginHorizontal: 20,
   },
   songInfo: {
     flex: 1,
