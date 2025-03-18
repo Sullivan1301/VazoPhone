@@ -62,11 +62,12 @@ export default function LibraryScreen() {
       });
 
       if (Platform.OS === 'android') {
-        await TaskManager.registerTaskAsync(BACKGROUND_TASK, {
-          name: BACKGROUND_TASK,
-          options: { priority: TaskManager.TaskManagerBackgroundTaskPriority.HIGH },
-        });
-        await TaskManager.startTaskAsync(BACKGROUND_TASK);
+        Audio.setAudioModeAsync({
+            allowsRecordingIOS: false,
+            staysActiveInBackground: true,
+            playsInSilentModeIOS: true,
+            shouldDuckAndroid: true,
+          });
       }
 
       checkPermissionAndLoadSongs();
@@ -77,7 +78,6 @@ export default function LibraryScreen() {
 
     return () => {
       if (sound) sound.unloadAsync();
-      if (mediaSession.current) mediaSession.current.release();
     };
   }, []);
 
