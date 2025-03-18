@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   Modal,
   Image,
+  Alert,
 } from 'react-native';
 import * as MediaLibrary from 'expo-media-library';
 import { Audio } from 'expo-av';
@@ -38,14 +39,26 @@ export default function LibraryScreen() {
 
   useEffect(() => {
     checkPermissionAndLoadSongs();
+
+    return () => {
+      if (sound) {
+        sound.unloadAsync();
+      }
+    };
   }, []);
 
   const checkPermissionAndLoadSongs = async () => {
     setLoading(true);
-    const { status } = await MediaLibrary.requestPermissionsAsync();
-    setPermission(status === 'granted');
+    const { status, canAskAgain } = await MediaLibrary.getPermissionsAsync();
 
-    if (status === 'granted') {
+    if (status !== 'granted' && canAskAgain) {
+      const { status: newStatus } = await MediaLibrary.requestPermissionsAsync();
+      setPermission(newStatus === 'granted');
+    } else {
+      setPermission(status === 'granted');
+    }
+
+    if (permission) {
       await loadSongs();
     }
     setLoading(false);
@@ -55,34 +68,27 @@ export default function LibraryScreen() {
     try {
       const media = await MediaLibrary.getAssetsAsync({
         mediaType: MediaLibrary.MediaType.audio,
-        first: 1000,
+        first: 100,
       });
       setSongs(media.assets);
     } catch (error) {
-      console.error('Erreur lors du chargement des fichiers audio :', error);
+      console.error('Erreur chargement audio :', error);
+      Alert.alert('Erreur', 'Impossible de charger les musiques');
     }
   };
 
-  const getMetadata = async (
-    uri: string
-  ): Promise<{ title: string; artist: string; artwork?: string | null }> => {
+  const getMetadata = async (id: string) => {
     try {
-      const { sound: tempSound } = await Audio.Sound.createAsync({ uri });
-      const status = await tempSound.getStatusAsync();
-      await tempSound.unloadAsync();
-
-      const meta = (status as any).metadata;
-      if (meta) {
-        return {
-          title: meta.title || 'Inconnu',
-          artist: meta.artist || 'Artiste inconnu',
-          artwork: meta.artwork || null,
-        };
-      }
+      const assetInfo = await MediaLibrary.getAssetInfoAsync(id);
+      return {
+        title: assetInfo.filename || 'Inconnu',
+        artist: assetInfo.artist || 'Artiste inconnu',
+        artwork: assetInfo.artwork?.localUri || null,
+      };
     } catch (error) {
-      console.error('Erreur lors de la récupération des métadonnées :', error);
+      console.error('Erreur métadonnées :', error);
+      return { title: 'Inconnu', artist: 'Artiste inconnu', artwork: null };
     }
-    return { title: 'Inconnu', artist: 'Artiste inconnu', artwork: null };
   };
 
   const playSound = async (index: number) => {
@@ -92,71 +98,64 @@ export default function LibraryScreen() {
       if (sound) {
         await sound.stopAsync();
         await sound.unloadAsync();
-        setSound(null);
       }
 
       const song = songs[index];
       const { sound: newSound } = await Audio.Sound.createAsync(
         { uri: song.uri },
-        { shouldPlay: true }
+        { shouldPlay: true },
+        (status) => {
+          if (status.isLoaded) {
+            setPosition(status.positionMillis / 1000);
+            setDuration(status.durationMillis / 1000);
+            if (status.didJustFinish) handleNext();
+          }
+        }
       );
+
+      const meta = await getMetadata(song.id);
+      setMetadata(meta);
 
       setSound(newSound);
       setCurrentSong(song.id);
       setCurrentIndex(index);
       setIsPlaying(true);
-      setPosition(0); // Réinitialiser la position à 0
 
-      const meta = await getMetadata(song.uri);
-      setMetadata(meta);
-
-      newSound.setOnPlaybackStatusUpdate((status) => {
-        if (status.isLoaded) {
-          if (status.positionMillis !== undefined) {
-            setPosition(status.positionMillis / 1000);
-          }
-          if (status.durationMillis !== undefined) {
-            setDuration(status.durationMillis / 1000);
-          }
-          if (status.didJustFinish) {
-            handleNext();
-          }
-        }
-      });
     } catch (error) {
-      console.error('Erreur lors de la lecture du son :', error);
+      console.error('Erreur lecture :', error);
+      Alert.alert('Erreur', 'Impossible de lire ce fichier audio');
     }
   };
 
   const togglePlayback = async () => {
-    if (sound) {
-      if (isPlaying) {
-        await sound.pauseAsync();
-        setIsPlaying(false);
-      } else {
-        await sound.playAsync();
-        setIsPlaying(true);
-      }
+    if (!sound) return;
+
+    if (isPlaying) {
+      await sound.pauseAsync();
+      setIsPlaying(false);
+    } else {
+      await sound.playAsync();
+      setIsPlaying(true);
     }
   };
 
   const handleNext = () => {
-    if (currentIndex !== null && currentIndex < songs.length - 1) {
-      playSound(currentIndex + 1);
-    }
+    if (currentIndex === null) return;
+    const newIndex = currentIndex < songs.length - 1 ? currentIndex + 1 : 0;
+    playSound(newIndex);
   };
 
   const handlePrevious = () => {
-    if (currentIndex !== null && currentIndex > 0) {
-      playSound(currentIndex - 1);
-    }
+    if (currentIndex === null) return;
+    const newIndex = currentIndex > 0 ? currentIndex - 1 : songs.length - 1;
+    playSound(newIndex);
   };
 
-  const formatDuration = (seconds: number | undefined) => {
-    if (!seconds) return '00:00';
+  const formatDuration = (seconds: number) => {
+    if (!seconds || seconds < 0) return '00:00';
     const minutes = Math.floor(seconds / 60);
     const secs = Math.floor(seconds % 60);
-    return `${minutes}:${secs < 10 ? '0' : ''}${secs}`;
+    return `${minutes}:${secs.toString().padStart(2, '0')}`;
   };
 
   if (!permission) {
@@ -164,22 +163,22 @@ export default function LibraryScreen() {
       <View style={styles.container}>
         <Text style={styles.title}>Permission requise</Text>
         <Text style={styles.text}>
-          Veuillez accorder l'accès à votre bibliothèque pour utiliser VazoPhone.
+          Veuillez accorder l'accès à votre bibliothèque musicale.
         </Text>
-        <Button title="Accorder l'accès" onPress={checkPermissionAndLoadSongs} />
+        <Button title="Autoriser l'accès" onPress={checkPermissionAndLoadSongs} />
       </View>
     );
   }
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Votre Bibliothèque</Text>
+      <Text style={styles.title}>Bibliothèque Musicale</Text>
 
       {loading ? (
         <ActivityIndicator size="large" color="#6366F1" />
       ) : (
         <>
-          <Button title="Recharger la liste" onPress={loadSongs} />
+          <Button title="Actualiser" onPress={loadSongs} />
           <FlatList
             data={songs}
             keyExtractor={(item) => item.id}
@@ -191,73 +190,71 @@ export default function LibraryScreen() {
                 <View style={styles.songInfo}>
                   <Text style={styles.songTitle}>{item.filename}</Text>
                   <Text style={styles.songDuration}>
-                    {formatDuration(item.duration)}
+                    {formatDuration(item.duration || 0)}
                   </Text>
                 </View>
-                {currentSong === item.id && isPlaying ? (
-                  <Pause color="#FF0000" size={24} />
-                ) : (
-                  <Play color="#6366F1" size={24} />
-                )}
+                {currentSong === item.id ? (
+                  isPlaying ? (
+                    <Pause color="#FF0000" size={24} />
+                  ) : (
+                    <Play color="#6366F1" size={24} />
+                  )
+                ) : null}
               </TouchableOpacity>
             )}
           />
         </>
       )}
 
-      {/* Contrôles de lecture et barre de progression */}
       {currentIndex !== null && (
-        <View style={styles.controls}>
-          <View style={styles.progressContainer}>
-            <Text style={styles.timeText}>{formatDuration(position)}</Text>
-            <Text style={styles.timeText}>{formatDuration(duration)}</Text>
+        <>
+          <TouchableOpacity
+            style={styles.currentSongBar}
+            onPress={() => setShowDetail(true)}
+          >
+            <Text style={styles.currentSongTitle}>{metadata.title}</Text>
+            <Text style={styles.currentSongArtist}>{metadata.artist}</Text>
+          </TouchableOpacity>
+
+          <View style={styles.controls}>
+            <View style={styles.progressContainer}>
+              <Text style={styles.timeText}>{formatDuration(position)}</Text>
+              <Slider
+                style={styles.slider}
+                minimumValue={0}
+                maximumValue={duration}
+                value={position}
+                onSlidingComplete={async (value) => {
+                  await sound?.setPositionAsync(value * 1000);
+                }}
+                minimumTrackTintColor="#FFFFFF"
+                maximumTrackTintColor="#666666"
+                thumbTintColor="#FFFFFF"
+              />
+              <Text style={styles.timeText}>{formatDuration(duration)}</Text>
+            </View>
+
+            <View style={styles.controlButtons}>
+              <TouchableOpacity onPress={handlePrevious}>
+                <SkipBack color="#FFFFFF" size={32} />
+              </TouchableOpacity>
+
+              <TouchableOpacity onPress={togglePlayback} style={styles.playButton}>
+                {isPlaying ? (
+                  <Pause color="#FFFFFF" size={40} />
+                ) : (
+                  <Play color="#FFFFFF" size={40} />
+                )}
+              </TouchableOpacity>
+
+              <TouchableOpacity onPress={handleNext}>
+                <SkipForward color="#FFFFFF" size={32} />
+              </TouchableOpacity>
+            </View>
           </View>
-
-          <View style={styles.controlButtons}>
-            <TouchableOpacity
-              onPress={handlePrevious}
-              style={styles.controlButton}
-            >
-              <SkipBack color="#FFFFFF" size={32} />
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              onPress={togglePlayback}
-              style={styles.controlButton}
-            >
-              {isPlaying ? (
-                <Pause color="#FF0000" size={40} />
-              ) : (
-                <Play color="#FFFFFF" size={40} />
-              )}
-            </TouchableOpacity>
-
-            <TouchableOpacity onPress={handleNext} style={styles.controlButton}>
-              <SkipForward color="#FFFFFF" size={32} />
-            </TouchableOpacity>
-          </View>
-
-          {/* Afficher la chanson suivante */}
-          {currentIndex < songs.length - 1 && (
-            <Text style={styles.nextSong}>
-              Next: {songs[currentIndex + 1].filename}
-            </Text>
-          )}
-        </View>
+        </>
       )}
 
-      {/* Barre affichant les métadonnées du morceau courant et ouvrant le détail */}
-      {currentIndex !== null && (
-        <TouchableOpacity
-          style={styles.currentSongBar}
-          onPress={() => setShowDetail(true)}
-        >
-          <Text style={styles.currentSongTitle}>{metadata.title}</Text>
-          <Text style={styles.currentSongArtist}>{metadata.artist}</Text>
-        </TouchableOpacity>
-      )}
-
-      {/* Modal pour la vue détaillée */}
       <Modal visible={showDetail} animationType="slide">
         <View style={styles.modalContainer}>
           {metadata.artwork ? (
@@ -265,44 +262,22 @@ export default function LibraryScreen() {
           ) : (
             <View style={styles.artworkPlaceholder} />
           )}
+
           <Text style={styles.detailTitle}>{metadata.title}</Text>
           <Text style={styles.detailArtist}>{metadata.artist}</Text>
 
           <View style={styles.progressContainer}>
             <Text style={styles.timeText}>{formatDuration(position)}</Text>
+            <Slider
+              style={styles.slider}
+              // ... mêmes props que précédemment
+            />
             <Text style={styles.timeText}>{formatDuration(duration)}</Text>
           </View>
 
-          <View style={styles.controls}>
-            <TouchableOpacity
-              onPress={handlePrevious}
-              style={styles.controlButton}
-            >
-              <SkipBack color="#FFFFFF" size={32} />
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              onPress={togglePlayback}
-              style={styles.controlButton}
-            >
-              {isPlaying ? (
-                <Pause color="#FF0000" size={40} />
-              ) : (
-                <Play color="#FFFFFF" size={40} />
-              )}
-            </TouchableOpacity>
-
-            <TouchableOpacity onPress={handleNext} style={styles.controlButton}>
-              <SkipForward color="#FFFFFF" size={32} />
-            </TouchableOpacity>
+          <View style={styles.controlButtons}>
+            {/* Contrôles identiques à la vue principale */}
           </View>
-
-          {/* Afficher la chanson suivante dans le Modal */}
-          {currentIndex !== null && currentIndex < songs.length - 1 && (
-            <Text style={styles.nextSong}>
-              Next: {songs[currentIndex + 1].filename}
-            </Text>
-          )}
 
           <Button title="Fermer" onPress={() => setShowDetail(false)} />
         </View>
@@ -323,11 +298,14 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter-Bold',
     color: '#FFFFFF',
     marginBottom: 20,
+    textAlign: 'center',
   },
   text: {
     fontSize: 16,
     fontFamily: 'Inter-Regular',
     color: '#9CA3AF',
+    textAlign: 'center',
+    marginVertical: 10,
   },
   songItem: {
     flexDirection: 'row',
@@ -338,12 +316,12 @@ const styles = StyleSheet.create({
   },
   songInfo: {
     flex: 1,
+    marginRight: 15,
   },
   songTitle: {
     fontSize: 16,
     fontFamily: 'Inter-SemiBold',
     color: '#FFFFFF',
-    marginBottom: 4,
   },
   songDuration: {
     fontSize: 14,
@@ -351,24 +329,23 @@ const styles = StyleSheet.create({
     color: '#9CA3AF',
   },
   controls: {
-    padding: 20,
-    borderTopWidth: 1,
-    borderTopColor: '#333',
+    backgroundColor: '#00000050',
+    paddingVertical: 20,
   },
   controlButtons: {
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
-    marginTop: 10,
+    marginTop: 15,
   },
-  controlButton: {
-    marginHorizontal: 20,
+  playButton: {
+    marginHorizontal: 30,
   },
   currentSongBar: {
-    backgroundColor: '#333',
+    backgroundColor: '#333333',
     padding: 15,
     borderRadius: 8,
-    marginVertical: 10,
+    margin: 10,
   },
   currentSongTitle: {
     fontSize: 18,
@@ -383,53 +360,52 @@ const styles = StyleSheet.create({
   modalContainer: {
     flex: 1,
     backgroundColor: '#1E1E1E',
-    paddingTop: 60,
-    paddingHorizontal: 20,
+    padding: 20,
     justifyContent: 'center',
-    alignItems: 'center',
   },
   artwork: {
-    width: 200,
-    height: 200,
+    width: 300,
+    height: 300,
     borderRadius: 10,
-    marginBottom: 20,
+    marginBottom: 30,
+    alignSelf: 'center',
   },
   artworkPlaceholder: {
-    width: 200,
-    height: 200,
-    borderRadius: 10,
+    width: 300,
+    height: 300,
     backgroundColor: '#333',
-    marginBottom: 20,
+    borderRadius: 10,
+    marginBottom: 30,
+    alignSelf: 'center',
   },
   detailTitle: {
-    fontSize: 28,
+    fontSize: 32,
     fontFamily: 'Inter-Bold',
     color: '#FFFFFF',
+    textAlign: 'center',
     marginBottom: 10,
   },
   detailArtist: {
-    fontSize: 20,
+    fontSize: 24,
     fontFamily: 'Inter-Regular',
     color: '#9CA3AF',
+    textAlign: 'center',
     marginBottom: 40,
   },
   progressContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginVertical: 10,
-    width: '100%',
+    marginVertical: 20,
+  },
+  slider: {
+    flex: 1,
+    marginHorizontal: 10,
   },
   timeText: {
     fontSize: 14,
-    fontFamily: 'Inter-Regular',
     color: '#FFFFFF',
-    marginHorizontal: 10,
-  },
-  nextSong: {
-    fontSize: 14,
     fontFamily: 'Inter-Regular',
-    color: '#9CA3AF',
-    marginTop: 10,
+    minWidth: 50,
     textAlign: 'center',
   },
 });
