@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import {
   View,
   Text,
@@ -9,80 +9,95 @@ import {
   ActivityIndicator,
   Modal,
   Image,
+  Alert,
+  Platform,
 } from 'react-native';
 import * as MediaLibrary from 'expo-media-library';
 import { Audio } from 'expo-av';
 import { Play, Pause, SkipBack, SkipForward } from 'lucide-react-native';
 import Slider from '@react-native-community/slider';
+import * as Notifications from 'expo-notifications';
+import * as TaskManager from 'expo-task-manager';
+
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowAlert: true,
+    shouldPlaySound: false,
+    shouldSetBadge: false,
+  }),
+});
+
+// Tâche en arrière-plan pour Android
+const BACKGROUND_TASK = 'audio-background-task';
+TaskManager.defineTask(BACKGROUND_TASK, () => {
+  return new Promise(resolve => {
+    resolve({
+      success: true,
+      data: { alive: true },
+    });
+  });
+});
 
 export default function LibraryScreen() {
   const [songs, setSongs] = useState<MediaLibrary.Asset[]>([]);
-  const [permission, setPermission] = useState<boolean>(false);
+  const [permission, setPermission] = useState(false);
   const [sound, setSound] = useState<Audio.Sound | null>(null);
   const [currentSong, setCurrentSong] = useState<string | null>(null);
-  const [isPlaying, setIsPlaying] = useState<boolean>(false);
-  const [loading, setLoading] = useState<boolean>(true);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [currentIndex, setCurrentIndex] = useState<number | null>(null);
-  const [metadata, setMetadata] = useState<{
-    title: string;
-    artist: string;
-    artwork?: string | null;
-  }>({
+  const [metadata, setMetadata] = useState({
     title: '',
     artist: '',
-    artwork: null,
+    artwork: null as string | null,
   });
-  const [position, setPosition] = useState<number>(0);
-  const [duration, setDuration] = useState<number>(0);
-  const [showDetail, setShowDetail] = useState<boolean>(false);
+  const [position, setPosition] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [showDetail, setShowDetail] = useState(false);
+  const mediaSession = useRef<MediaLibrary.MediaSession | null>(null);
 
+
+  // Configuration initiale
   useEffect(() => {
-    checkPermissionAndLoadSongs();
-  }, []);
-
-  const checkPermissionAndLoadSongs = async () => {
-    setLoading(true);
-    const { status } = await MediaLibrary.requestPermissionsAsync();
-    setPermission(status === 'granted');
-
-    if (status === 'granted') {
-      await loadSongs();
-    }
-    setLoading(false);
-  };
-
-  const loadSongs = async () => {
-    try {
-      const media = await MediaLibrary.getAssetsAsync({
-        mediaType: MediaLibrary.MediaType.audio,
-        first: 1000,
+    const setup = async () => {
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: false,
+        staysActiveInBackground: true,
+        playsInSilentModeIOS: true,
+        shouldDuckAndroid: true,
       });
-      setSongs(media.assets);
-    } catch (error) {
-      console.error('Erreur lors du chargement des fichiers audio :', error);
-    }
-  };
 
-  const getMetadata = async (
-    uri: string
-  ): Promise<{ title: string; artist: string; artwork?: string | null }> => {
-    try {
-      const { sound: tempSound } = await Audio.Sound.createAsync({ uri });
-      const status = await tempSound.getStatusAsync();
-      await tempSound.unloadAsync();
-
-      const meta = (status as any).metadata;
-      if (meta) {
-        return {
-          title: meta.title || 'Inconnu',
-          artist: meta.artist || 'Artiste inconnu',
-          artwork: meta.artwork || null,
-        };
+      if (Platform.OS === 'android') {
+        await TaskManager.registerTaskAsync(BACKGROUND_TASK, {
+          name: BACKGROUND_TASK,
+          options: {
+            priority: TaskManager.TaskManagerBackgroundTaskPriority.HIGH,
+          },
+        });
+        await TaskManager.startTaskAsync(BACKGROUND_TASK);
       }
-    } catch (error) {
-      console.error('Erreur lors de la récupération des métadonnées :', error);
-    }
-    return { title: 'Inconnu', artist: 'Artiste inconnu', artwork: null };
+
+      checkPermissionAndLoadSongs();
+      confugureNotifications();
+    };
+
+    setup();
+
+    return () => {
+      if (sound) sound.unloadAsync();
+      if (mediaSession.current) mediaSession.current.release();
+    };
+  }, []);
+const configureNotifications = async () => {
+    await Notifications.setNotificationCategoryAsync('music_controls', [
+      {
+        identifier: 'play_pause',
+        buttonTitle: isPlaying ? 'Pause' : 'Play',
+        options: { opensAppToForeground: false },
+      },
+      { identifier: 'next', buttonTitle: 'Suivant' },
+      { identifier: 'previous', buttonTitle: 'Précédent' },
+    ]);
   };
 
   const playSound = async (index: number) => {
@@ -92,94 +107,333 @@ export default function LibraryScreen() {
       if (sound) {
         await sound.stopAsync();
         await sound.unloadAsync();
-        setSound(null);
       }
 
       const song = songs[index];
       const { sound: newSound } = await Audio.Sound.createAsync(
         { uri: song.uri },
-        { shouldPlay: true }
+        { shouldPlay: true },
+        (status) => {
+          if (status.isLoaded) {
+            setPosition(status.positionMillis / 1000);
+            setDuration(status.durationMillis / 1000);
+            if (status.didJustFinish) handleNext();
+          }
+        }
       );
 
+      const meta = await getMetadata(song.id);
+      setMetadata(meta);
       setSound(newSound);
       setCurrentSong(song.id);
       setCurrentIndex(index);
       setIsPlaying(true);
-      setPosition(0); // Réinitialiser la position à 0
 
-      const meta = await getMetadata(song.uri);
-      setMetadata(meta);
-
-      newSound.setOnPlaybackStatusUpdate((status) => {
-        if (status.isLoaded) {
-          if (status.positionMillis !== undefined) {
-            setPosition(status.positionMillis / 1000);
-          }
-          if (status.durationMillis !== undefined) {
-            setDuration(status.durationMillis / 1000);
-          }
-          if (status.didJustFinish) {
-            handleNext();
-          }
-        }
-      });
+      await setupMediaSession();
+      await updateMediaSession();
+      await updateNotification();
     } catch (error) {
-      console.error('Erreur lors de la lecture du son :', error);
+      Alert.alert('Erreur', 'Impossible de lire ce fichier audio');
     }
   };
 
-  const togglePlayback = async () => {
-    if (sound) {
-      if (isPlaying) {
-        await sound.pauseAsync();
-        setIsPlaying(false);
-      } else {
-        await sound.playAsync();
-        setIsPlaying(true);
-      }
+ 
+   return (
+      <View style={styles.container}>
+        <Text style={styles.title}>Bibliothèque Musicale</Text>
+
+        {loading ? (
+          <ActivityIndicator size="large" color="#6366F1" />
+        ) : (
+          <>
+            <Button title="Actualiser" onPress={loadSongs} />
+            <FlatList
+              data={songs}
+              keyExtractor={(item) => item.id}
+              renderItem={({ item, index }) => (
+                <TouchableOpacity
+                  style={styles.songItem}
+                  onPress={() => playSound(index)}
+                >
+                  <View style={styles.songInfo}>
+                    <Text style={styles.songTitle}>{item.filename}</Text>
+                    <Text style={styles.songDuration}>
+                      {formatDuration(item.duration || 0)}
+                    </Text>
+                  </View>
+                  {currentSong === item.id ? (
+                    isPlaying ? (
+                      <Pause color="#FF0000" size={24} />
+                    ) : (
+                      <Play color="#6366F1" size={24} />
+                    )
+                  ) : null}
+                </TouchableOpacity>
+              )}
+            />
+          </>
+        )}
+
+        {currentIndex !== null && (
+          <>
+            <TouchableOpacity
+              style={styles.currentSongBar}
+              onPress={() => setShowDetail(true)}
+            >
+              <Text style={styles.currentSongTitle}>{metadata.title}</Text>
+              <Text style={styles.currentSongArtist}>{metadata.artist}</Text>
+            </TouchableOpacity>
+
+            <View style={styles.controls}>
+              <View style={styles.progressContainer}>
+                <Text style={styles.timeText}>{formatDuration(position)}</Text>
+                <Slider
+                  style={styles.slider}
+                  minimumValue={0}
+                  maximumValue={duration}
+                  value={position}
+                  onSlidingComplete={async (value) => {
+                    await sound?.setPositionAsync(value * 1000);
+                  }}
+                  minimumTrackTintColor="#FFFFFF"
+                  maximumTrackTintColor="#666666"
+                  thumbTintColor="#FFFFFF"
+                />
+                <Text style={styles.timeText}>{formatDuration(duration)}</Text>
+              </View>
+
+              <View style={styles.controlButtons}>
+                <TouchableOpacity onPress={handlePrevious}>
+                  <SkipBack color="#FFFFFF" size={32} />
+                </TouchableOpacity>
+
+                <TouchableOpacity onPress={togglePlayback} style={styles.playButton}>
+                  {isPlaying ? (
+                    <Pause color="#FFFFFF" size={40} />
+                  ) : (
+                    <Play color="#FFFFFF" size={40} />
+                  )}
+                </TouchableOpacity>
+
+                <TouchableOpacity onPress={handleNext}>
+                  <SkipForward color="#FFFFFF" size={32} />
+                </TouchableOpacity>
+              </View>
+            </View>
+          </>
+        )}
+
+        <Modal visible={showDetail} animationType="slide">
+          <View style={styles.modalContainer}>
+            {metadata.artwork ? (
+              <Image source={{ uri: metadata.artwork }} style={styles.artwork} />
+            ) : (
+              <View style={styles.artworkPlaceholder} />
+            )}
+
+            <Text style={styles.detailTitle}>{metadata.title}</Text>
+            <Text style={styles.detailArtist}>{metadata.artist}</Text>
+
+            <View style={styles.progressContainer}>
+              <Text style={styles.timeText}>{formatDuration(position)}</Text>
+              <Slider
+                style={styles.slider}
+                // ... mêmes props que précédemment
+              />
+              <Text style={styles.timeText}>{formatDuration(duration)}</Text>
+            </View>
+
+            <View style={styles.controlButtons}>
+              {/* Contrôles identiques à la vue principale */}
+            </View>
+
+            <Button title="Fermer" onPress={() => setShowDetail(false)} />
+          </View>
+        </Modal>
+      </View>
+    );
+  }
+
+  const styles = StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: '#1E1E1E',
+      paddingTop: 60,
+      paddingHorizontal: 20,
+    },
+    title: {
+      fontSize: 28,
+      fontFamily: 'Inter-Bold',
+      color: '#FFFFFF',
+      marginBottom: 20,
+      textAlign: 'center',
+    },
+    text: {
+      fontSize: 16,
+      fontFamily: 'Inter-Regular',
+      color: '#9CA3AF',
+      textAlign: 'center',
+      marginVertical: 10,
+    },
+    songItem: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      padding: 15,
+      borderBottomWidth: 1,
+      borderBottomColor: '#333',
+    },
+    songInfo: {
+      flex: 1,
+      marginRight: 15,
+    },
+    songTitle: {
+      fontSize: 16,
+      fontFamily: 'Inter-SemiBold',
+      color: '#FFFFFF',
+    },
+    songDuration: {
+      fontSize: 14,
+      fontFamily: 'Inter-Regular',
+      color: '#9CA3AF',
+    },
+    controls: {
+      backgroundColor: '#00000050',
+      paddingVertical: 20,
+    },
+    controlButtons: {
+      flexDirection: 'row',
+      justifyContent: 'center',
+      alignItems: 'center',
+      marginTop: 15,
+    },
+    playButton: {
+      marginHorizontal: 30,
+    },
+    currentSongBar: {
+      backgroundColor: '#333333',
+      padding: 15,
+      borderRadius: 8,
+      margin: 10,
+    },
+    currentSongTitle: {
+      fontSize: 18,
+      fontFamily: 'Inter-Bold',
+      color: '#FFFFFF',
+    },
+    currentSongArtist: {
+      fontSize: 14,
+      fontFamily: 'Inter-Regular',
+      color: '#9CA3AF',
+    },
+    modalContainer: {
+      flex: 1,
+      backgroundColor: '#1E1E1E',
+      padding: 20,
+      justifyContent: 'center',
+    },
+    artwork: {
+      width: 300,
+      height: 300,
+      borderRadius: 10,
+      marginBottom: 30,
+      alignSelf: 'center',
+    },
+    artworkPlaceholder: {
+      width: 300,
+      height: 300,
+      backgroundColor: '#333',
+      borderRadius: 10,
+      marginBottom: 30,
+      alignSelf: 'center',
+    },
+    detailTitle: {
+      fontSize: 32,
+      fontFamily: 'Inter-Bold',
+      color: '#FFFFFF',
+      textAlign: 'center',
+      marginBottom: 10,
+    },
+    detailArtist: {
+      fontSize: 24,
+      fontFamily: 'Inter-Regular',
+      color: '#9CA3AF',
+      textAlign: 'center',
+      marginBottom: 40,
+    },
+    progressContainer: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginVertical: 20,
+    },
+    slider: {
+      flex: 1,
+      marginHorizontal: 10,
+    },
+    timeText: {
+      fontSize: 14,
+      color: '#FFFFFF',
+      fontFamily: 'Inter-Regular',
+      minWidth: 50,
+      textAlign: 'center',
+    },
+  });
+
+
+    if (isPlaying) {
+      await sound.pauseAsync();
+      setIsPlaying(false);
+    } else {
+      await sound.playAsync();
+      setIsPlaying(true);
     }
+
+    // Mettre à jour la notification
+    await updateNotification();
   };
 
+  // Musique suivante
   const handleNext = () => {
-    if (currentIndex !== null && currentIndex < songs.length - 1) {
-      playSound(currentIndex + 1);
-    }
+    if (currentIndex === null) return;
+    const newIndex = currentIndex < songs.length - 1 ? currentIndex + 1 : 0;
+    playSound(newIndex);
   };
 
+  // Musique précédente
   const handlePrevious = () => {
-    if (currentIndex !== null && currentIndex > 0) {
-      playSound(currentIndex - 1);
-    }
+    if (currentIndex === null) return;
+    const newIndex = currentIndex > 0 ? currentIndex - 1 : songs.length - 1;
+    playSound(newIndex);
   };
 
-  const formatDuration = (seconds: number | undefined) => {
-    if (!seconds) return '00:00';
+  // Afficher la durée formatée
+  const formatDuration = (seconds: number) => {
+    if (!seconds || seconds < 0) return '00:00';
     const minutes = Math.floor(seconds / 60);
     const secs = Math.floor(seconds % 60);
-    return `${minutes}:${secs < 10 ? '0' : ''}${secs}`;
+    return `${minutes}:${secs.toString().padStart(2, '0')}`;
   };
 
+  // Si la permission n'est pas accordée
   if (!permission) {
     return (
       <View style={styles.container}>
         <Text style={styles.title}>Permission requise</Text>
         <Text style={styles.text}>
-          Veuillez accorder l'accès à votre bibliothèque pour utiliser VazoPhone.
+          Veuillez accorder l'accès à votre bibliothèque musicale.
         </Text>
-        <Button title="Accorder l'accès" onPress={checkPermissionAndLoadSongs} />
+        <Button title="Autoriser l'accès" onPress={checkPermissionAndLoadSongs} />
       </View>
     );
   }
 
-  return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Votre Bibliothèque</Text>
+<View style={styles.container}>
+      <Text style={styles.title}>Bibliothèque Musicale</Text>
 
       {loading ? (
         <ActivityIndicator size="large" color="#6366F1" />
       ) : (
         <>
-          <Button title="Recharger la liste" onPress={loadSongs} />
+          <Button title="Actualiser" onPress={loadSongs} />
           <FlatList
             data={songs}
             keyExtractor={(item) => item.id}
@@ -191,73 +445,71 @@ export default function LibraryScreen() {
                 <View style={styles.songInfo}>
                   <Text style={styles.songTitle}>{item.filename}</Text>
                   <Text style={styles.songDuration}>
-                    {formatDuration(item.duration)}
+                    {formatDuration(item.duration || 0)}
                   </Text>
                 </View>
-                {currentSong === item.id && isPlaying ? (
-                  <Pause color="#FF0000" size={24} />
-                ) : (
-                  <Play color="#6366F1" size={24} />
-                )}
+                {currentSong === item.id ? (
+                  isPlaying ? (
+                    <Pause color="#FF0000" size={24} />
+                  ) : (
+                    <Play color="#6366F1" size={24} />
+                  )
+                ) : null}
               </TouchableOpacity>
             )}
           />
         </>
       )}
 
-      {/* Contrôles de lecture et barre de progression */}
       {currentIndex !== null && (
-        <View style={styles.controls}>
-          <View style={styles.progressContainer}>
-            <Text style={styles.timeText}>{formatDuration(position)}</Text>
-            <Text style={styles.timeText}>{formatDuration(duration)}</Text>
+        <>
+          <TouchableOpacity
+            style={styles.currentSongBar}
+            onPress={() => setShowDetail(true)}
+          >
+            <Text style={styles.currentSongTitle}>{metadata.title}</Text>
+            <Text style={styles.currentSongArtist}>{metadata.artist}</Text>
+          </TouchableOpacity>
+
+          <View style={styles.controls}>
+            <View style={styles.progressContainer}>
+              <Text style={styles.timeText}>{formatDuration(position)}</Text>
+              <Slider
+                style={styles.slider}
+                minimumValue={0}
+                maximumValue={duration}
+                value={position}
+                onSlidingComplete={async (value) => {
+                  await sound?.setPositionAsync(value * 1000);
+                }}
+                minimumTrackTintColor="#FFFFFF"
+                maximumTrackTintColor="#666666"
+                thumbTintColor="#FFFFFF"
+              />
+              <Text style={styles.timeText}>{formatDuration(duration)}</Text>
+            </View>
+
+            <View style={styles.controlButtons}>
+              <TouchableOpacity onPress={handlePrevious}>
+                <SkipBack color="#FFFFFF" size={32} />
+              </TouchableOpacity>
+
+              <TouchableOpacity onPress={togglePlayback} style={styles.playButton}>
+                {isPlaying ? (
+                  <Pause color="#FFFFFF" size={40} />
+                ) : (
+                  <Play color="#FFFFFF" size={40} />
+                )}
+              </TouchableOpacity>
+
+              <TouchableOpacity onPress={handleNext}>
+                <SkipForward color="#FFFFFF" size={32} />
+              </TouchableOpacity>
+            </View>
           </View>
-
-          <View style={styles.controlButtons}>
-            <TouchableOpacity
-              onPress={handlePrevious}
-              style={styles.controlButton}
-            >
-              <SkipBack color="#FFFFFF" size={32} />
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              onPress={togglePlayback}
-              style={styles.controlButton}
-            >
-              {isPlaying ? (
-                <Pause color="#FF0000" size={40} />
-              ) : (
-                <Play color="#FFFFFF" size={40} />
-              )}
-            </TouchableOpacity>
-
-            <TouchableOpacity onPress={handleNext} style={styles.controlButton}>
-              <SkipForward color="#FFFFFF" size={32} />
-            </TouchableOpacity>
-          </View>
-
-          {/* Afficher la chanson suivante */}
-          {currentIndex < songs.length - 1 && (
-            <Text style={styles.nextSong}>
-              Next: {songs[currentIndex + 1].filename}
-            </Text>
-          )}
-        </View>
+        </>
       )}
 
-      {/* Barre affichant les métadonnées du morceau courant et ouvrant le détail */}
-      {currentIndex !== null && (
-        <TouchableOpacity
-          style={styles.currentSongBar}
-          onPress={() => setShowDetail(true)}
-        >
-          <Text style={styles.currentSongTitle}>{metadata.title}</Text>
-          <Text style={styles.currentSongArtist}>{metadata.artist}</Text>
-        </TouchableOpacity>
-      )}
-
-      {/* Modal pour la vue détaillée */}
       <Modal visible={showDetail} animationType="slide">
         <View style={styles.modalContainer}>
           {metadata.artwork ? (
@@ -265,30 +517,26 @@ export default function LibraryScreen() {
           ) : (
             <View style={styles.artworkPlaceholder} />
           )}
+
           <Text style={styles.detailTitle}>{metadata.title}</Text>
           <Text style={styles.detailArtist}>{metadata.artist}</Text>
 
           <View style={styles.progressContainer}>
             <Text style={styles.timeText}>{formatDuration(position)}</Text>
-            <Slider
-                    style={{ flex: 1, marginHorizontal: 10 }}
-                    minimumValue={0}
-                    maximumValue={duration}          
-                  value={position}                  
-                   minimumTrackTintColor="#FFFFFF"
-                    maximumTrackTintColor="#9CA3AF"
-                   thumbTintColor="#FFFFFF"
-                 onValueChange={(value) => {
-      
-      setPosition(value);
-    }}
-    onSlidingComplete={async (value) => {
-      
-      if (sound) {
-        await sound.setPositionAsync(value * 1000);
-      }
-    }}
-  />
+             <Slider
+        style={styles.slider}
+        minimumValue={0}
+        maximumValue={duration}
+        value={position}
+        onValueChange={(value) => setPosition(value)}
+        onSlidingComplete={async (value) => {
+          if (sound) await sound.setPositionAsync(value * 1000);
+        }}
+        minimumTrackTintColor="#FFFFFF"
+        maximumTrackTintColor="#9CA3AF"
+        thumbTintColor="#FFFFFF"
+      />
+
             <Text style={styles.timeText}>{formatDuration(duration)}</Text>
           </View>
 
@@ -312,14 +560,6 @@ export default function LibraryScreen() {
   </View>
 </View>
 
-
-          {/* Afficher la chanson suivante dans le Modal */}
-          {currentIndex !== null && currentIndex < songs.length - 1 && (
-            <Text style={styles.nextSong}>
-              Next: {songs[currentIndex + 1].filename}
-            </Text>
-          )}
-
           <Button title="Fermer" onPress={() => setShowDetail(false)} />
         </View>
       </Modal>
@@ -339,11 +579,14 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter-Bold',
     color: '#FFFFFF',
     marginBottom: 20,
+    textAlign: 'center',
   },
   text: {
     fontSize: 16,
     fontFamily: 'Inter-Regular',
     color: '#9CA3AF',
+    textAlign: 'center',
+    marginVertical: 10,
   },
   songItem: {
     flexDirection: 'row',
@@ -354,12 +597,12 @@ const styles = StyleSheet.create({
   },
   songInfo: {
     flex: 1,
+    marginRight: 15,
   },
   songTitle: {
     fontSize: 16,
     fontFamily: 'Inter-SemiBold',
     color: '#FFFFFF',
-    marginBottom: 4,
   },
   songDuration: {
     fontSize: 14,
@@ -367,24 +610,23 @@ const styles = StyleSheet.create({
     color: '#9CA3AF',
   },
   controls: {
-    padding: 20,
-    borderTopWidth: 1,
-    borderTopColor: '#333',
+    backgroundColor: '#00000050',
+    paddingVertical: 20,
   },
   controlButtons: {
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
-    marginTop: 10,
+    marginTop: 15,
   },
-  controlButton: {
-    marginHorizontal: 20,
+  playButton: {
+    marginHorizontal: 30,
   },
   currentSongBar: {
-    backgroundColor: '#333',
+    backgroundColor: '#333333',
     padding: 15,
     borderRadius: 8,
-    marginVertical: 10,
+    margin: 10,
   },
   currentSongTitle: {
     fontSize: 18,
@@ -399,53 +641,52 @@ const styles = StyleSheet.create({
   modalContainer: {
     flex: 1,
     backgroundColor: '#1E1E1E',
-    paddingTop: 60,
-    paddingHorizontal: 20,
+    padding: 20,
     justifyContent: 'center',
-    alignItems: 'center',
   },
   artwork: {
-    width: 200,
-    height: 200,
+    width: 300,
+    height: 300,
     borderRadius: 10,
-    marginBottom: 20,
+    marginBottom: 30,
+    alignSelf: 'center',
   },
   artworkPlaceholder: {
-    width: 200,
-    height: 200,
-    borderRadius: 10,
+    width: 300,
+    height: 300,
     backgroundColor: '#333',
-    marginBottom: 20,
+    borderRadius: 10,
+    marginBottom: 30,
+    alignSelf: 'center',
   },
   detailTitle: {
-    fontSize: 28,
+    fontSize: 32,
     fontFamily: 'Inter-Bold',
     color: '#FFFFFF',
+    textAlign: 'center',
     marginBottom: 10,
   },
   detailArtist: {
-    fontSize: 20,
+    fontSize: 24,
     fontFamily: 'Inter-Regular',
     color: '#9CA3AF',
+    textAlign: 'center',
     marginBottom: 40,
   },
   progressContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginVertical: 10,
-    width: '100%',
+    marginVertical: 20,
+  },
+  slider: {
+    flex: 1,
+    marginHorizontal: 10,
   },
   timeText: {
     fontSize: 14,
-    fontFamily: 'Inter-Regular',
     color: '#FFFFFF',
-    marginHorizontal: 10,
-  },
-  nextSong: {
-    fontSize: 14,
     fontFamily: 'Inter-Regular',
-    color: '#9CA3AF',
-    marginTop: 10,
+    minWidth: 50,
     textAlign: 'center',
   },
 });
