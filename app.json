@@ -48,7 +48,7 @@
       [
         "expo-media-library",
         {
-          "photosPermission": "Allow VazoPhone to access your photos.",
+          "mediasPermission": "Allow VazoPhone to access your media library.",
           "savePhotosPermission": "Allow VazoPhone to save photos.",
           "isAccessMediaLocationEnabled": true
         }
