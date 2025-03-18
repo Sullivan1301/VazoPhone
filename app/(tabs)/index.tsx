@@ -270,32 +270,48 @@ export default function LibraryScreen() {
 
           <View style={styles.progressContainer}>
             <Text style={styles.timeText}>{formatDuration(position)}</Text>
+            <Slider
+                    style={{ flex: 1, marginHorizontal: 10 }}
+                    minimumValue={0}
+                    maximumValue={duration}          
+                  value={position}                  
+                   minimumTrackTintColor="#FFFFFF"
+                    maximumTrackTintColor="#9CA3AF"
+                   thumbTintColor="#FFFFFF"
+                 onValueChange={(value) => {
+      
+      setPosition(value);
+    }}
+    onSlidingComplete={async (value) => {
+      
+      if (sound) {
+        await sound.setPositionAsync(value * 1000);
+      }
+    }}
+  />
             <Text style={styles.timeText}>{formatDuration(duration)}</Text>
           </View>
 
           <View style={styles.controls}>
-            <TouchableOpacity
-              onPress={handlePrevious}
-              style={styles.controlButton}
-            >
-              <SkipBack color="#FFFFFF" size={32} />
-            </TouchableOpacity>
+  <View style={styles.controlButtons}>
+    <TouchableOpacity onPress={handlePrevious} style={styles.controlButton}>
+      <SkipBack color="#FFFFFF" size={32} />
+    </TouchableOpacity>
 
-            <TouchableOpacity
-              onPress={togglePlayback}
-              style={styles.controlButton}
-            >
-              {isPlaying ? (
-                <Pause color="#FF0000" size={40} />
-              ) : (
-                <Play color="#FFFFFF" size={40} />
-              )}
-            </TouchableOpacity>
+    <TouchableOpacity onPress={togglePlayback} style={styles.controlButton}>
+      {isPlaying ? (
+        <Pause color="#FF0000" size={40} />
+      ) : (
+        <Play color="#FFFFFF" size={40} />
+      )}
+    </TouchableOpacity>
 
-            <TouchableOpacity onPress={handleNext} style={styles.controlButton}>
-              <SkipForward color="#FFFFFF" size={32} />
-            </TouchableOpacity>
-          </View>
+    <TouchableOpacity onPress={handleNext} style={styles.controlButton}>
+      <SkipForward color="#FFFFFF" size={32} />
+    </TouchableOpacity>
+  </View>
+</View>
+
 
           {/* Afficher la chanson suivante dans le Modal */}
           {currentIndex !== null && currentIndex < songs.length - 1 && (
