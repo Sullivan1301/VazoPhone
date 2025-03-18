@@ -378,7 +378,7 @@ const configureNotifications = async () => {
     },
   });
 
-
+   try{
     if (isPlaying) {
       await sound.pauseAsync();
       setIsPlaying(false);
@@ -386,9 +386,10 @@ const configureNotifications = async () => {
       await sound.playAsync();
       setIsPlaying(true);
     }
-
-    // Mettre à jour la notification
     await updateNotification();
+    } catch (error){
+        console.error('Erreur togglePlayback': error);
+        }
   };
 
   // Musique suivante
