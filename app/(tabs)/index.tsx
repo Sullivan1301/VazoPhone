@@ -15,6 +15,16 @@ import * as MediaLibrary from 'expo-media-library';
 import { Audio } from 'expo-av';
 import { Play, Pause, SkipBack, SkipForward } from 'lucide-react-native';
 import Slider from '@react-native-community/slider';
+import * as Notifications from 'expo-notifications';
+
+// Configurer les notifications
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowAlert: true,
+    shouldPlaySound: false,
+    shouldSetBadge: false,
+  }),
+});
 
 export default function LibraryScreen() {
   const [songs, setSongs] = useState<MediaLibrary.Asset[]>([]);
@@ -37,8 +47,10 @@ export default function LibraryScreen() {
   const [duration, setDuration] = useState<number>(0);
   const [showDetail, setShowDetail] = useState<boolean>(false);
 
+  // Charger les permissions et les musiques
   useEffect(() => {
     checkPermissionAndLoadSongs();
+    configureNotifications();
 
     return () => {
       if (sound) {
@@ -47,23 +59,77 @@ export default function LibraryScreen() {
     };
   }, []);
 
-  const checkPermissionAndLoadSongs = async () => {
-    setLoading(true);
-    const { status, canAskAgain } = await MediaLibrary.getPermissionsAsync();
-
-    if (status !== 'granted' && canAskAgain) {
-      const { status: newStatus } = await MediaLibrary.requestPermissionsAsync();
-      setPermission(newStatus === 'granted');
-    } else {
-      setPermission(status === 'granted');
-    }
-
-    if (permission) {
-      await loadSongs();
-    }
-    setLoading(false);
+  // Configurer les actions de notification
+  const configureNotifications = async () => {
+    await Notifications.setNotificationCategoryAsync('music_controls', [
+      {
+        identifier: 'play_pause',
+        buttonTitle: isPlaying ? 'Pause' : 'Play',
+        options: {
+          opensAppToForeground: false,
+        },
+      },
+      {
+        identifier: 'next',
+        buttonTitle: 'Suivant',
+        options: {
+          opensAppToForeground: false,
+        },
+      },
+      {
+        identifier: 'previous',
+        buttonTitle: 'Précédent',
+        options: {
+          opensAppToForeground: false,
+        },
+      },
+    ]);
   };
 
+  // Mettre à jour la notification
+  const updateNotification = async () => {
+    await Notifications.scheduleNotificationAsync({
+      content: {
+        title: metadata.title,
+        body: metadata.artist,
+        sound: false,
+        categoryIdentifier: 'music_controls',
+        data: { songId: currentSong },
+      },
+      trigger: null, // Envoyer immédiatement
+    });
+  };
+
+  // Gérer les actions de notification
+  const handleNotificationAction = (action: string) => {
+    switch (action) {
+      case 'play_pause':
+        togglePlayback();
+        break;
+      case 'next':
+        handleNext();
+        break;
+      case 'previous':
+        handlePrevious();
+        break;
+      default:
+        break;
+    }
+  };
+
+  // Écouter les actions de notification
+  useEffect(() => {
+    const subscription = Notifications.addNotificationResponseReceivedListener(
+      (response) => {
+        const action = response.actionIdentifier;
+        handleNotificationAction(action);
+      }
+    );
+
+    return () => subscription.remove();
+  }, [isPlaying, currentIndex]);
+
+  // Charger les musiques
   const loadSongs = async () => {
     try {
       const media = await MediaLibrary.getAssetsAsync({
@@ -77,20 +143,7 @@ export default function LibraryScreen() {
     }
   };
 
-  const getMetadata = async (id: string) => {
-    try {
-      const assetInfo = await MediaLibrary.getAssetInfoAsync(id);
-      return {
-        title: assetInfo.filename || 'Inconnu',
-        artist: assetInfo.artist || 'Artiste inconnu',
-        artwork: assetInfo.artwork?.localUri || null,
-      };
-    } catch (error) {
-      console.error('Erreur métadonnées :', error);
-      return { title: 'Inconnu', artist: 'Artiste inconnu', artwork: null };
-    }
-  };
-
+  // Lire une musique
   const playSound = async (index: number) => {
     if (index < 0 || index >= songs.length) return;
 
@@ -121,12 +174,16 @@ export default function LibraryScreen() {
       setCurrentIndex(index);
       setIsPlaying(true);
 
+      // Mettre à jour la notification
+      await updateNotification();
+
     } catch (error) {
       console.error('Erreur lecture :', error);
       Alert.alert('Erreur', 'Impossible de lire ce fichier audio');
     }
   };
 
+  // Play/Pause
   const togglePlayback = async () => {
     if (!sound) return;
 
@@ -137,20 +194,26 @@ export default function LibraryScreen() {
       await sound.playAsync();
       setIsPlaying(true);
     }
+
+    // Mettre à jour la notification
+    await updateNotification();
   };
 
+  // Musique suivante
   const handleNext = () => {
     if (currentIndex === null) return;
     const newIndex = currentIndex < songs.length - 1 ? currentIndex + 1 : 0;
     playSound(newIndex);
   };
 
+  // Musique précédente
   const handlePrevious = () => {
     if (currentIndex === null) return;
     const newIndex = currentIndex > 0 ? currentIndex - 1 : songs.length - 1;
     playSound(newIndex);
   };
 
+  // Afficher la durée formatée
   const formatDuration = (seconds: number) => {
     if (!seconds || seconds < 0) return '00:00';
     const minutes = Math.floor(seconds / 60);
@@ -158,6 +221,7 @@ export default function LibraryScreen() {
     return `${minutes}:${secs.toString().padStart(2, '0')}`;
   };
 
+  // Si la permission n'est pas accordée
   if (!permission) {
     return (
       <View style={styles.container}>
@@ -170,8 +234,7 @@ export default function LibraryScreen() {
     );
   }
 
-  return (
-    <View style={styles.container}>
+<View style={styles.container}>
       <Text style={styles.title}>Bibliothèque Musicale</Text>
 
       {loading ? (
