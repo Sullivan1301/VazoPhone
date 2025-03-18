@@ -1,6 +1,10 @@
 {
   "extends": "expo/tsconfig.base",
   "compilerOptions": {
+    "types": [
+      "react-native",
+      "@react-native-community/slider"
+    ],
     "strict": true,
     "paths": {
       "@/*": [

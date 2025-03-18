@@ -1,9 +1,8 @@
 import { View, StyleSheet } from 'react-native';
-import { PanGestureHandler } from 'react-native-gesture-handler';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
-  useAnimatedGestureHandler,
-  useAnimatedStyle,
   useSharedValue,
+  useAnimatedStyle,
   withSpring,
 } from 'react-native-reanimated';
 
@@ -14,33 +13,29 @@ type PlaybackSliderProps = {
 };
 
 export function PlaybackSlider({ position, duration, onSeek }: PlaybackSliderProps) {
-  const progress = useSharedValue(0);
-  
-  const gestureHandler = useAnimatedGestureHandler({
-    onStart: (_, ctx: any) => {
-      ctx.startX = progress.value;
-    },
-    onActive: (event, ctx) => {
-      const newProgress = ctx.startX + event.translationX;
-      progress.value = Math.max(0, Math.min(newProgress, 1));
-    },
-    onEnd: () => {
-      onSeek(progress.value * duration);
-    },
-  });
+  const progress = useSharedValue(position / duration);
 
-  const sliderStyle = useAnimatedStyle(() => {
-    return {
-      width: `${(position / duration) * 100}%`,
-      backgroundColor: '#6366F1',
-    };
-  });
+  const panGesture = Gesture.Pan()
+    .onStart(() => {
+      // On commence le geste
+    })
+    .onUpdate((event) => {
+      progress.value = Math.max(0, Math.min(event.translationX / 200, 1)); // Normalisation
+    })
+    .onEnd(() => {
+      onSeek(progress.value * duration);
+    });
+
+  const sliderStyle = useAnimatedStyle(() => ({
+    width: `${progress.value * 100}%`,
+    backgroundColor: '#6366F1',
+  }));
 
   return (
     <View style={styles.container}>
-      <PanGestureHandler onGestureEvent={gestureHandler}>
+      <GestureDetector gesture={panGesture}>
         <Animated.View style={[styles.slider, sliderStyle]} />
-      </PanGestureHandler>
+      </GestureDetector>
     </View>
   );
 }
