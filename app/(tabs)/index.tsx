@@ -167,16 +167,242 @@ export default function LibraryScreen() {
     await updateMediaSession();
   };
 
-  // Reste du code inchangé...
-  // (handleNext, handlePrevious, formatDuration, etc.)
+   return (
+      <View style={styles.container}>
+        <Text style={styles.title}>Bibliothèque Musicale</Text>
 
-  return (
-    <View style={styles.container}>
-      {/* Interface utilisateur existante */}
-    </View>
-  );
-}
+        {loading ? (
+          <ActivityIndicator size="large" color="#6366F1" />
+        ) : (
+          <>
+            <Button title="Actualiser" onPress={loadSongs} />
+            <FlatList
+              data={songs}
+              keyExtractor={(item) => item.id}
+              renderItem={({ item, index }) => (
+                <TouchableOpacity
+                  style={styles.songItem}
+                  onPress={() => playSound(index)}
+                >
+                  <View style={styles.songInfo}>
+                    <Text style={styles.songTitle}>{item.filename}</Text>
+                    <Text style={styles.songDuration}>
+                      {formatDuration(item.duration || 0)}
+                    </Text>
+                  </View>
+                  {currentSong === item.id ? (
+                    isPlaying ? (
+                      <Pause color="#FF0000" size={24} />
+                    ) : (
+                      <Play color="#6366F1" size={24} />
+                    )
+                  ) : null}
+                </TouchableOpacity>
+              )}
+            />
+          </>
+        )}
 
-const styles = StyleSheet.create({
-  // Styles existants
-});
+        {currentIndex !== null && (
+          <>
+            <TouchableOpacity
+              style={styles.currentSongBar}
+              onPress={() => setShowDetail(true)}
+            >
+              <Text style={styles.currentSongTitle}>{metadata.title}</Text>
+              <Text style={styles.currentSongArtist}>{metadata.artist}</Text>
+            </TouchableOpacity>
+
+            <View style={styles.controls}>
+              <View style={styles.progressContainer}>
+                <Text style={styles.timeText}>{formatDuration(position)}</Text>
+                <Slider
+                  style={styles.slider}
+                  minimumValue={0}
+                  maximumValue={duration}
+                  value={position}
+                  onSlidingComplete={async (value) => {
+                    await sound?.setPositionAsync(value * 1000);
+                  }}
+                  minimumTrackTintColor="#FFFFFF"
+                  maximumTrackTintColor="#666666"
+                  thumbTintColor="#FFFFFF"
+                />
+                <Text style={styles.timeText}>{formatDuration(duration)}</Text>
+              </View>
+
+              <View style={styles.controlButtons}>
+                <TouchableOpacity onPress={handlePrevious}>
+                  <SkipBack color="#FFFFFF" size={32} />
+                </TouchableOpacity>
+
+                <TouchableOpacity onPress={togglePlayback} style={styles.playButton}>
+                  {isPlaying ? (
+                    <Pause color="#FFFFFF" size={40} />
+                  ) : (
+                    <Play color="#FFFFFF" size={40} />
+                  )}
+                </TouchableOpacity>
+
+                <TouchableOpacity onPress={handleNext}>
+                  <SkipForward color="#FFFFFF" size={32} />
+                </TouchableOpacity>
+              </View>
+            </View>
+          </>
+        )}
+
+        <Modal visible={showDetail} animationType="slide">
+          <View style={styles.modalContainer}>
+            {metadata.artwork ? (
+              <Image source={{ uri: metadata.artwork }} style={styles.artwork} />
+            ) : (
+              <View style={styles.artworkPlaceholder} />
+            )}
+
+            <Text style={styles.detailTitle}>{metadata.title}</Text>
+            <Text style={styles.detailArtist}>{metadata.artist}</Text>
+
+            <View style={styles.progressContainer}>
+              <Text style={styles.timeText}>{formatDuration(position)}</Text>
+              <Slider
+                style={styles.slider}
+                // ... mêmes props que précédemment
+              />
+              <Text style={styles.timeText}>{formatDuration(duration)}</Text>
+            </View>
+
+            <View style={styles.controlButtons}>
+              {/* Contrôles identiques à la vue principale */}
+            </View>
+
+            <Button title="Fermer" onPress={() => setShowDetail(false)} />
+          </View>
+        </Modal>
+      </View>
+    );
+  }
+
+  const styles = StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: '#1E1E1E',
+      paddingTop: 60,
+      paddingHorizontal: 20,
+    },
+    title: {
+      fontSize: 28,
+      fontFamily: 'Inter-Bold',
+      color: '#FFFFFF',
+      marginBottom: 20,
+      textAlign: 'center',
+    },
+    text: {
+      fontSize: 16,
+      fontFamily: 'Inter-Regular',
+      color: '#9CA3AF',
+      textAlign: 'center',
+      marginVertical: 10,
+    },
+    songItem: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      padding: 15,
+      borderBottomWidth: 1,
+      borderBottomColor: '#333',
+    },
+    songInfo: {
+      flex: 1,
+      marginRight: 15,
+    },
+    songTitle: {
+      fontSize: 16,
+      fontFamily: 'Inter-SemiBold',
+      color: '#FFFFFF',
+    },
+    songDuration: {
+      fontSize: 14,
+      fontFamily: 'Inter-Regular',
+      color: '#9CA3AF',
+    },
+    controls: {
+      backgroundColor: '#00000050',
+      paddingVertical: 20,
+    },
+    controlButtons: {
+      flexDirection: 'row',
+      justifyContent: 'center',
+      alignItems: 'center',
+      marginTop: 15,
+    },
+    playButton: {
+      marginHorizontal: 30,
+    },
+    currentSongBar: {
+      backgroundColor: '#333333',
+      padding: 15,
+      borderRadius: 8,
+      margin: 10,
+    },
+    currentSongTitle: {
+      fontSize: 18,
+      fontFamily: 'Inter-Bold',
+      color: '#FFFFFF',
+    },
+    currentSongArtist: {
+      fontSize: 14,
+      fontFamily: 'Inter-Regular',
+      color: '#9CA3AF',
+    },
+    modalContainer: {
+      flex: 1,
+      backgroundColor: '#1E1E1E',
+      padding: 20,
+      justifyContent: 'center',
+    },
+    artwork: {
+      width: 300,
+      height: 300,
+      borderRadius: 10,
+      marginBottom: 30,
+      alignSelf: 'center',
+    },
+    artworkPlaceholder: {
+      width: 300,
+      height: 300,
+      backgroundColor: '#333',
+      borderRadius: 10,
+      marginBottom: 30,
+      alignSelf: 'center',
+    },
+    detailTitle: {
+      fontSize: 32,
+      fontFamily: 'Inter-Bold',
+      color: '#FFFFFF',
+      textAlign: 'center',
+      marginBottom: 10,
+    },
+    detailArtist: {
+      fontSize: 24,
+      fontFamily: 'Inter-Regular',
+      color: '#9CA3AF',
+      textAlign: 'center',
+      marginBottom: 40,
+    },
+    progressContainer: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginVertical: 20,
+    },
+    slider: {
+      flex: 1,
+      marginHorizontal: 10,
+    },
+    timeText: {
+      fontSize: 14,
+      color: '#FFFFFF',
+      fontFamily: 'Inter-Regular',
+      minWidth: 50,
+      textAlign: 'center',
+    },
+  });
