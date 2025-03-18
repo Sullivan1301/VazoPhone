@@ -331,16 +331,42 @@ export default function LibraryScreen() {
 
           <View style={styles.progressContainer}>
             <Text style={styles.timeText}>{formatDuration(position)}</Text>
-            <Slider
-              style={styles.slider}
-              // ... mêmes props que précédemment
-            />
+             <Slider
+        style={styles.slider}
+        minimumValue={0}
+        maximumValue={duration}
+        value={position}
+        onValueChange={(value) => setPosition(value)}
+        onSlidingComplete={async (value) => {
+          if (sound) await sound.setPositionAsync(value * 1000);
+        }}
+        minimumTrackTintColor="#FFFFFF"
+        maximumTrackTintColor="#9CA3AF"
+        thumbTintColor="#FFFFFF"
+      />
+
             <Text style={styles.timeText}>{formatDuration(duration)}</Text>
           </View>
 
-          <View style={styles.controlButtons}>
-            {/* Contrôles identiques à la vue principale */}
-          </View>
+          <View style={styles.controls}>
+  <View style={styles.controlButtons}>
+    <TouchableOpacity onPress={handlePrevious} style={styles.controlButton}>
+      <SkipBack color="#FFFFFF" size={32} />
+    </TouchableOpacity>
+
+    <TouchableOpacity onPress={togglePlayback} style={styles.controlButton}>
+      {isPlaying ? (
+        <Pause color="#FF0000" size={40} />
+      ) : (
+        <Play color="#FFFFFF" size={40} />
+      )}
+    </TouchableOpacity>
+
+    <TouchableOpacity onPress={handleNext} style={styles.controlButton}>
+      <SkipForward color="#FFFFFF" size={32} />
+    </TouchableOpacity>
+  </View>
+</View>
 
           <Button title="Fermer" onPress={() => setShowDetail(false)} />
         </View>
