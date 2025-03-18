@@ -40,7 +40,8 @@
         "android.permission.FOREGROUND_SERVICE",
         "android.permission.WAKE_LOCK"
       ],
-      "package": "com.vazophone.app"
+      "package": "com.vazophone.app",
+      "versionCode": 1
     },
     "plugins": [
       "expo-router",
@@ -51,7 +52,17 @@
           "savePhotosPermission": "Allow VazoPhone to save photos.",
           "isAccessMediaLocationEnabled": true
         }
-      ]
-    ]
+      ],
+      "expo-build-properties"
+    ],
+    "extra": {
+      "router": {
+        "origin": false
+      },
+      "eas": {
+        "projectId": "61df6e66-e894-4fdd-ac84-a157053ae60a"
+      }
+    },
+    "owner": "sullivan1301"
   }
 }
